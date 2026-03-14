@@ -3,6 +3,9 @@ name: Build and Push Development Docker Images
 on:
   push:
     branches: [ "main" ]
+  schedule:
+    - cron: '0 2 * * 6'
+  workflow_dispatch:
 
 concurrency:
   group: docker
@@ -45,26 +48,13 @@ jobs:
       run: |
         echo "REPO_LC=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
 
-    - name: Compute version string
-      run: |
-        SHA12="${GITHUB_SHA:0:12}"
-        BRANCH="${GITHUB_REF_NAME}"
-        if [ -z "${BRANCH}" ]; then
-          VERSION="dev"
-        else
-          VERSION="dev/${BRANCH}@${SHA12}"
-        fi
-        echo "VERSION=${VERSION}" >> $GITHUB_ENV
-
     - name: Build and push Docker image (single arch)
       uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
       with:
         context: .
         push: true
         platforms: linux/${{ matrix.arch }}
-        tags: ghcr.io/${{ env.REPO_LC }}-snapshot:dev-${{ matrix.arch }}
-        build-args: |
-          VERSION=${{ env.VERSION }}
+        tags: ghcr.io/${{ env.REPO_LC }}:current-${{ matrix.arch }}
 
   manifest:
     needs: build-and-push
@@ -93,14 +83,14 @@ jobs:
     - name: Create and push multi-arch manifest tag
       shell: bash
       run: |
-        IMAGE="ghcr.io/${REPO_LC}-snapshot"
+        IMAGE="ghcr.io/${REPO_LC}"
 
         docker buildx imagetools create \
-          -t "${IMAGE}:dev" \
-          "${IMAGE}:dev-amd64" \
-          "${IMAGE}:dev-arm64"
+          -t "${IMAGE}:current" \
+          "${IMAGE}:current-amd64" \
+          "${IMAGE}:current-arm64"
 
-        docker buildx imagetools inspect "${IMAGE}:dev"
+        docker buildx imagetools inspect "${IMAGE}:current"
 
   cleanup:
     needs: manifest
@@ -122,9 +112,9 @@ jobs:
       uses: actions/delete-package-versions@e5bc658cc4c965c472efe991f8beea3981499c55 # v5.0.0
       with:
         owner: ${{ github.repository_owner }}
-        package-name: ${{ env.PACKAGE_NAME_LC }}-snapshot
+        package-name: ${{ env.PACKAGE_NAME_LC }}
         package-type: container
-        min-versions-to-keep: 10
+        min-versions-to-keep: 5
         delete-only-untagged-versions: 'true'
 
   trigger-rollout:
@@ -147,5 +137,5 @@ jobs:
         with:
           audience: ${{ secrets.KUBEROLLOUTTRIGGER_AUD }}
           url: ${{ secrets.KUBEROLLOUTTRIGGER_URL }}
-          image: ghcr.io/${{ env.REPO_LC }}-snapshot
-          tags: dev,dev-amd64,dev-arm64
+          image: ghcr.io/${{ env.REPO_LC }}
+          tags: current,current-amd64,current-arm64
