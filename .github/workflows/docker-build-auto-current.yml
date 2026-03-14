@@ -3,6 +3,9 @@ name: Build and Push Development Docker Images
 on:
   push:
     branches: [ "main" ]
+    paths:
+      - .github/workflows/docker-build-auto-current.yml
+      - Dockerfile
   schedule:
     - cron: '0 2 * * 6'
   workflow_dispatch:
