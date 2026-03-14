@@ -54,6 +54,8 @@ jobs:
         context: .
         push: true
         platforms: linux/${{ matrix.arch }}
+        build-args: |
+          CMAKE_CUDA_ARCHITECTURES=121
         tags: ghcr.io/${{ env.REPO_LC }}:current-${{ matrix.arch }}
 
   manifest:
