@@ -1,15 +1,8 @@
 # syntax=docker/dockerfile:1.7
 
-ARG CUDA_DEVEL_IMAGE=nvidia/cuda:13.1.1-devel-ubuntu24.04
-ARG CUDA_RUNTIME_IMAGE=nvidia/cuda:13.1.1-runtime-ubuntu24.04
-ARG LLAMA_CPP_REPO=https://github.com/ggml-org/llama.cpp.git
-ARG LLAMA_CPP_REF=master
-
-FROM ${CUDA_DEVEL_IMAGE} AS builder
+FROM nvidia/cuda:13.1.1-devel-ubuntu24.04 AS builder
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG LLAMA_CPP_REPO
-ARG LLAMA_CPP_REF
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
@@ -24,7 +17,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /src
 
-RUN git clone --depth 1 --branch "${LLAMA_CPP_REF}" "${LLAMA_CPP_REPO}" llama.cpp
+RUN set -eux; \
+    LLAMA_CPP_TAG="$(curl -fsSL https://api.github.com/repos/ggml-org/llama.cpp/releases/latest | sed -n 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p')"; \
+    test -n "$LLAMA_CPP_TAG"; \
+    echo "Building llama.cpp release tag: $LLAMA_CPP_TAG"; \
+    git clone --depth 1 --branch "$LLAMA_CPP_TAG" https://github.com/ggml-org/llama.cpp.git llama.cpp
 
 WORKDIR /src/llama.cpp
 
@@ -37,7 +34,7 @@ RUN cmake -S . -B build \
 
 RUN cmake --build build --config Release --target llama-server -j"$(nproc)"
 
-FROM ${CUDA_RUNTIME_IMAGE} AS runtime
+FROM nvidia/cuda:13.1.1-runtime-ubuntu24.04 AS runtime
 
 ARG DEBIAN_FRONTEND=noninteractive
 
