@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM nvidia/cuda:13.1.1-devel-ubuntu24.04 AS builder
+FROM nvidia/cuda:13.2.0-devel-ubuntu24.04 AS builder
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG CMAKE_CUDA_ARCHITECTURES=121
@@ -37,7 +37,7 @@ RUN cmake -S . -B build \
 
 RUN cmake --build build --config Release --target llama-server -j"$(nproc)"
 
-FROM nvidia/cuda:13.1.1-runtime-ubuntu24.04 AS runtime
+FROM nvidia/cuda:13.2.0-runtime-ubuntu24.04 AS runtime
 
 ARG DEBIAN_FRONTEND=noninteractive
 
