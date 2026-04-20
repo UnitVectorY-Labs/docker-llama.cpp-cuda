@@ -40,6 +40,10 @@ RUN cmake --build build --config Release --target llama-server -j"$(nproc)"
 FROM nvidia/cuda:13.2.1-runtime-ubuntu24.04 AS runtime
 
 ARG DEBIAN_FRONTEND=noninteractive
+ARG APP_USER=llama
+ARG APP_HOME=/home/llama
+ARG APP_UID=1000
+ARG APP_GID=1000
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
@@ -48,13 +52,31 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /app
+RUN set -eux; \
+    groupadd --gid "${APP_GID}" "${APP_USER}"; \
+    useradd \
+        --uid "${APP_UID}" \
+        --gid "${APP_GID}" \
+        --create-home \
+        --home-dir "${APP_HOME}" \
+        --shell /usr/sbin/nologin \
+        "${APP_USER}"; \
+    install -d -o "${APP_UID}" -g "${APP_GID}" \
+        "${APP_HOME}/.cache/llama.cpp" \
+        "${APP_HOME}/.cache/huggingface"
+
+WORKDIR ${APP_HOME}
 
 COPY --from=builder /src/llama.cpp/build/bin/llama-server /usr/local/bin/llama-server
 
+ENV HOME=${APP_HOME}
+ENV XDG_CACHE_HOME=${APP_HOME}/.cache
+ENV HF_HOME=${APP_HOME}/.cache/huggingface
 ENV LLAMA_LOG_COLORS=1
 ENV LLAMA_LOG_PREFIX=1
 ENV LLAMA_LOG_TIMESTAMPS=1
+
+USER ${APP_UID}:${APP_GID}
 
 EXPOSE 8080
 
