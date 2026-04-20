@@ -53,15 +53,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 RUN set -eux; \
-    groupadd --gid "${APP_GID}" "${APP_USER}"; \
-    useradd \
-        --uid "${APP_UID}" \
-        --gid "${APP_GID}" \
-        --create-home \
-        --home-dir "${APP_HOME}" \
-        --shell /usr/sbin/nologin \
-        "${APP_USER}"; \
+    if ! getent group "${APP_GID}" >/dev/null; then \
+        groupadd --gid "${APP_GID}" "${APP_USER}"; \
+    fi; \
+    if ! getent passwd "${APP_UID}" >/dev/null; then \
+        useradd \
+            --uid "${APP_UID}" \
+            --gid "${APP_GID}" \
+            --create-home \
+            --home-dir "${APP_HOME}" \
+            --shell /usr/sbin/nologin \
+            "${APP_USER}"; \
+    fi; \
     install -d -o "${APP_UID}" -g "${APP_GID}" \
+        "${APP_HOME}" \
         "${APP_HOME}/.cache/llama.cpp" \
         "${APP_HOME}/.cache/huggingface"
 
