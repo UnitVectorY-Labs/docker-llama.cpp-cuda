@@ -4,6 +4,7 @@ FROM nvidia/cuda:13.3.1-devel-ubuntu24.04 AS builder
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG CMAKE_CUDA_ARCHITECTURES=121
+ARG LLAMA_CPP_REF=
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
@@ -19,10 +20,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /src
 
 RUN set -eux; \
-    LLAMA_CPP_TAG="$(curl -fsSL https://api.github.com/repos/ggml-org/llama.cpp/releases/latest | sed -n 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p')"; \
-    test -n "$LLAMA_CPP_TAG"; \
-    echo "Building llama.cpp release tag: $LLAMA_CPP_TAG"; \
-    git clone --depth 1 --branch "$LLAMA_CPP_TAG" https://github.com/ggml-org/llama.cpp.git llama.cpp
+    if [ -n "${LLAMA_CPP_REF}" ]; then \
+        echo "Building llama.cpp ref: ${LLAMA_CPP_REF}"; \
+        git clone --depth 1 --branch "${LLAMA_CPP_REF}" https://github.com/ggml-org/llama.cpp.git llama.cpp; \
+    else \
+        LLAMA_CPP_TAG="$(curl -fsSL https://api.github.com/repos/ggml-org/llama.cpp/releases/latest | sed -n 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p')"; \
+        test -n "$LLAMA_CPP_TAG"; \
+        echo "Building llama.cpp release tag: $LLAMA_CPP_TAG"; \
+        git clone --depth 1 --branch "$LLAMA_CPP_TAG" https://github.com/ggml-org/llama.cpp.git llama.cpp; \
+    fi
 
 WORKDIR /src/llama.cpp
 
