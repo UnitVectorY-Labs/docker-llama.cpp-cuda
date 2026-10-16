@@ -134,64 +134,23 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Protect all manifests referenced by tagged images
-      id: protected
-      shell: bash
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        # The official deletion action cannot follow references. Supply its
-        # ignore-versions input with every live image and attestation digest.
-        DIGESTS=$(gh api --paginate \
-          "/orgs/${GITHUB_REPOSITORY_OWNER}/packages/container/${PACKAGE_NAME_LC}/versions?per_page=100" \
-          --jq '.[] | select(.metadata.container.tags | length > 0) | .name')
-        test -n "$DIGESTS"
-        mapfile -t PENDING <<< "$DIGESTS"
-        # Also read the known live tags directly; package metadata may lag pushes.
-        for TAG in current current-amd64 current-arm64 master master-amd64 master-arm64; do
-          ROOT=$(docker buildx imagetools inspect "ghcr.io/${REPO_LC}:${TAG}" \
-            --format '{{json .Manifest}}' | jq -er '.digest')
-          PENDING+=("$ROOT")
-        done
-        declare -A SEEN
-        while (( ${#PENDING[@]} )); do
-          DIGEST="${PENDING[-1]}"
-          unset 'PENDING[-1]'
-          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
-          if [[ -n "${SEEN[$DIGEST]:-}" ]]; then
-            continue
-          fi
-          MANIFEST=$(docker buildx imagetools inspect "ghcr.io/${REPO_LC}@${DIGEST}" --raw)
-          jq -e '.schemaVersion == 2 and (has("manifests") or (has("config") and has("layers")))' \
-            <<< "$MANIFEST" > /dev/null
-          SEEN[$DIGEST]=1
-          CHILDREN=$(jq -r '[.manifests[]?.digest, .subject.digest? // empty][]' <<< "$MANIFEST")
-          if [[ -n "$CHILDREN" ]]; then
-            mapfile -t CHILD_DIGESTS <<< "$CHILDREN"
-            PENDING+=("${CHILD_DIGESTS[@]}")
-          fi
-        done
-        PATTERN=$(printf '%s\n' "${!SEEN[@]}" | sort | paste -sd '|')
-        echo "ignore-versions=^(${PATTERN})$" >> "$GITHUB_OUTPUT"
-        echo "digests=${!SEEN[*]}" >> "$GITHUB_OUTPUT"
-        echo "Protecting ${#SEEN[@]} tagged or referenced manifests from deletion."
-
     - name: Clean up untagged Docker images
-      uses: actions/delete-package-versions@e5bc658cc4c965c472efe991f8beea3981499c55 # v5.0.0
+      uses: UnitVectorY-Labs/delete-package-versions@26201fcc84c14aa3964764b989352ed24e4270ab # reference-aware cleanup, Node 24
       with:
         owner: ${{ github.repository_owner }}
         package-name: ${{ env.PACKAGE_NAME_LC }}
         package-type: container
         min-versions-to-keep: 5
         delete-only-untagged-versions: 'true'
-        ignore-versions: ${{ steps.protected.outputs.ignore-versions }}
 
-    - name: Verify protected manifests after cleanup
+    - name: Verify both published images and attestations after cleanup
       shell: bash
-      env:
-        PROTECTED_DIGESTS: ${{ steps.protected.outputs.digests }}
       run: |
-        read -ra DIGESTS <<< "$PROTECTED_DIGESTS"
-        for DIGEST in "${DIGESTS[@]}"; do
-          docker buildx imagetools inspect "ghcr.io/${REPO_LC}@${DIGEST}" > /dev/null
+        IMAGE="ghcr.io/${REPO_LC}"
+        for TAG in current master; do
+          MANIFEST=$(docker buildx imagetools inspect "${IMAGE}:${TAG}" --raw)
+          DIGESTS=$(jq -er '.manifests[].digest' <<< "$MANIFEST")
+          while IFS= read -r DIGEST; do
+            docker buildx imagetools inspect "${IMAGE}@${DIGEST}" > /dev/null
+          done <<< "$DIGESTS"
         done
