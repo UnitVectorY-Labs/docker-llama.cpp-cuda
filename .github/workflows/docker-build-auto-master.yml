@@ -10,8 +10,9 @@ on:
     - cron: '0 2 * * 6'
   workflow_dispatch:
 
+# Both publishers and their cleanup jobs operate on the same GHCR package.
 concurrency:
-  group: docker-master
+  group: docker
 
 jobs:
   build-and-push:
@@ -56,6 +57,7 @@ jobs:
       with:
         context: .
         push: true
+        provenance: true
         platforms: linux/${{ matrix.arch }}
         build-args: |
           CMAKE_CUDA_ARCHITECTURES=121
@@ -105,5 +107,91 @@ jobs:
           docker buildx imagetools inspect "${IMAGE}@${DIGEST}" > /dev/null
         done <<< "$DIGESTS"
 
-  # Do not delete untagged package versions: these include image and attestation
-  # manifests still referenced by current/master indexes in this shared package.
+  cleanup:
+    needs: manifest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+    - name: Set lowercase package name
+      shell: bash
+      run: |
+        PACKAGE_NAME=${GITHUB_REPOSITORY##*/}
+        echo "PACKAGE_NAME_LC=${PACKAGE_NAME,,}" >> "$GITHUB_ENV"
+        echo "REPO_LC=${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+    - name: Login to GitHub Container Registry
+      uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Protect all manifests referenced by tagged images
+      id: protected
+      shell: bash
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        # The official deletion action cannot follow references. Supply its
+        # ignore-versions input with every live image and attestation digest.
+        DIGESTS=$(gh api --paginate \
+          "/orgs/${GITHUB_REPOSITORY_OWNER}/packages/container/${PACKAGE_NAME_LC}/versions?per_page=100" \
+          --jq '.[] | select(.metadata.container.tags | length > 0) | .name')
+        test -n "$DIGESTS"
+        mapfile -t PENDING <<< "$DIGESTS"
+        # Also read the known live tags directly; package metadata may lag pushes.
+        for TAG in current current-amd64 current-arm64 master master-amd64 master-arm64; do
+          ROOT=$(docker buildx imagetools inspect "ghcr.io/${REPO_LC}:${TAG}" \
+            --format '{{json .Manifest}}' | jq -er '.digest')
+          PENDING+=("$ROOT")
+        done
+        declare -A SEEN
+        while (( ${#PENDING[@]} )); do
+          DIGEST="${PENDING[-1]}"
+          unset 'PENDING[-1]'
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          if [[ -n "${SEEN[$DIGEST]:-}" ]]; then
+            continue
+          fi
+          MANIFEST=$(docker buildx imagetools inspect "ghcr.io/${REPO_LC}@${DIGEST}" --raw)
+          jq -e '.schemaVersion == 2 and (has("manifests") or (has("config") and has("layers")))' \
+            <<< "$MANIFEST" > /dev/null
+          SEEN[$DIGEST]=1
+          CHILDREN=$(jq -r '[.manifests[]?.digest, .subject.digest? // empty][]' <<< "$MANIFEST")
+          if [[ -n "$CHILDREN" ]]; then
+            mapfile -t CHILD_DIGESTS <<< "$CHILDREN"
+            PENDING+=("${CHILD_DIGESTS[@]}")
+          fi
+        done
+        PATTERN=$(printf '%s\n' "${!SEEN[@]}" | sort | paste -sd '|')
+        echo "ignore-versions=^(${PATTERN})$" >> "$GITHUB_OUTPUT"
+        echo "digests=${!SEEN[*]}" >> "$GITHUB_OUTPUT"
+        echo "Protecting ${#SEEN[@]} tagged or referenced manifests from deletion."
+
+    - name: Clean up untagged Docker images
+      uses: actions/delete-package-versions@e5bc658cc4c965c472efe991f8beea3981499c55 # v5.0.0
+      with:
+        owner: ${{ github.repository_owner }}
+        package-name: ${{ env.PACKAGE_NAME_LC }}
+        package-type: container
+        min-versions-to-keep: 5
+        delete-only-untagged-versions: 'true'
+        ignore-versions: ${{ steps.protected.outputs.ignore-versions }}
+
+    - name: Verify protected manifests after cleanup
+      shell: bash
+      env:
+        PROTECTED_DIGESTS: ${{ steps.protected.outputs.digests }}
+      run: |
+        read -ra DIGESTS <<< "$PROTECTED_DIGESTS"
+        for DIGEST in "${DIGESTS[@]}"; do
+          docker buildx imagetools inspect "ghcr.io/${REPO_LC}@${DIGEST}" > /dev/null
+        done
