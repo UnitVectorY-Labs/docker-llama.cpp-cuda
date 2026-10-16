@@ -97,27 +97,12 @@ jobs:
 
         docker buildx imagetools inspect "${IMAGE}:current"
 
-  cleanup:
-    needs: manifest
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+        # Fetch every child; inspecting the index alone misses deleted manifests.
+        MANIFESTS=$(docker buildx imagetools inspect "${IMAGE}:current" --raw)
+        DIGESTS=$(jq -er '.manifests[].digest' <<< "$MANIFESTS")
+        while IFS= read -r DIGEST; do
+          docker buildx imagetools inspect "${IMAGE}@${DIGEST}" > /dev/null
+        done <<< "$DIGESTS"
 
-    permissions:
-      contents: read
-      packages: write
-
-    steps:
-    - name: Set lowercase package name
-      shell: bash
-      run: |
-        PACKAGE_NAME=${GITHUB_REPOSITORY##*/}
-        echo "PACKAGE_NAME_LC=${PACKAGE_NAME,,}" >> $GITHUB_ENV
-
-    - name: Clean up untagged (dangling) docker images
-      uses: actions/delete-package-versions@e5bc658cc4c965c472efe991f8beea3981499c55 # v5.0.0
-      with:
-        owner: ${{ github.repository_owner }}
-        package-name: ${{ env.PACKAGE_NAME_LC }}
-        package-type: container
-        min-versions-to-keep: 5
-        delete-only-untagged-versions: 'true'
+  # Do not delete untagged package versions: these include image and attestation
+  # manifests still referenced by current/master indexes in this shared package.
